@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SplitWise — Smart Expense Splitter</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="layout">
+
+<!-- ══ SIDEBAR ══════════════════════════════════ -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="eyebrow">BMCC · Final Project BY HEIN HTIKE ZAW</div>
+    <h1>Split<span>Wise</span></h1>
+  </div>
+
+  <div class="sidebar-section">Navigation</div>
+
+  <a href="{{ url_for('people_page') }}" class="sidebar-btn {% if active=='people' %}active{% endif %}">
+    <span class="icon">👥</span>
+    <span>People</span>
+    <span class="badge">{{ data.people|length }}</span>
+  </a>
+  <a href="{{ url_for('events_page') }}" class="sidebar-btn {% if active=='events' %}active{% endif %}">
+    <span class="icon">📁</span>
+    <span>Events</span>
+    <span class="badge">{{ data.events|length }}</span>
+  </a>
+  <a href="{{ url_for('summary_page') }}" class="sidebar-btn {% if active=='summary' %}active{% endif %}">
+    <span class="icon">📊</span>
+    <span>Summary</span>
+  </a>
+
+  <div class="sidebar-bottom">
+    <form method="POST" action="{{ url_for('reset') }}" onsubmit="return confirm('Reset ALL data?')">
+      <button type="submit" class="btn btn-ghost" style="width:100%;justify-content:center;font-size:12px">🗑 Reset All</button>
+    </form>
+  </div>
+</aside>
+
+<!-- ══ MAIN ══════════════════════════════════════ -->
+<main class="main">
+
+  <!-- Topbar -->
+  <div class="topbar">
+    <div>
+      {% if active == 'people' %}
+        <div class="topbar-title">People</div>
+        <div class="topbar-sub">Global people list — reused across all events</div>
+      {% elif active == 'events' %}
+        <div class="topbar-title">Events</div>
+        <div class="topbar-sub">Create events with activities and expenses</div>
+      {% else %}
+        <div class="topbar-title">Summary</div>
+        <div class="topbar-sub">Balances and settlement plan per event</div>
+      {% endif %}
+    </div>
+    {% if active == 'people' %}
+      <button class="btn btn-primary btn-sm" onclick="openModal('modal-add-person')">+ Add Person</button>
+    {% elif active == 'events' %}
+      <button class="btn btn-primary btn-sm" onclick="openModal('modal-add-event')">+ New Event</button>
+    {% endif %}
+  </div>
+
+  <!-- Flash messages -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="flash flash-{{ category }}">
+          {{ '✓' if category == 'success' else '✕' }}  {{ message }}
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <div class="content">
+
+  <!-- ════════════════════════════════════════════ -->
+  <!-- PEOPLE PANEL                                -->
+  <!-- ════════════════════════════════════════════ -->
+  {% if active == 'people' %}
+  <form method="GET" action="{{ url_for('people_page') }}" style="margin-bottom:20px">
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input name="q" type="text" placeholder="Search people…" value="{{ query or '' }}" oninput="this.form.submit()">
+    </div>
+  </form>
+
+  {% set people_list = people if people is defined else data.people %}
+  {% if people_list %}
+    <div class="people-grid">
+      {% for p in people_list %}
+      <div class="person-card">
+        <div class="av lg" style="background:{{ p.color }}">{{ p.initials }}</div>
+        <div class="person-info">
+          <div class="person-name">{{ p.name }}</div>
+          <div class="person-meta">
+            {{ data.events | selectattr('members', 'containing', p.id) | list | length }} event(s)
+          </div>
+        </div>
+        <form method="POST" action="{{ url_for('remove_person', pid=p.id) }}" onsubmit="return confirm('Remove {{ p.name }}?')">
+          <button type="submit" class="btn btn-danger" title="Remove">✕</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty"><div class="ei">👥</div>
+      {{ 'No results' if query else 'No people yet — add your first person above' }}
+    </div>
+  {% endif %}
+  {% endif %}
+
+
+  <!-- ════════════════════════════════════════════ -->
+  <!-- EVENTS PANEL                                -->
+  <!-- ════════════════════════════════════════════ -->
+  {% if active == 'events' %}
+  {% if data.events %}
+    {% for ev in data.events %}
+    {% set is_open = (open_event == ev.id) %}
+    <div class="event-card {{ 'open' if is_open }}">
+
+      <!-- Event Header -->
+      <div class="event-header" onclick="toggleCard('ev-{{ ev.id }}')">
+        <div class="ev-icon">{{ ev.icon }}</div>
+        <div class="ev-info">
+          <div class="ev-name">{{ ev.name }}</div>
+          <div class="ev-meta">{{ ev.members|length }} people · {{ ev.subs|length }} activit{{ 'y' if ev.subs|length == 1 else 'ies' }} · {{ ev.exp_count }} expense(s)</div>
+        </div>
+        <div class="ev-total">${{ "%.2f"|format(ev.total) }}</div>
+        <div class="ev-arrow" id="arr-ev-{{ ev.id }}">▼</div>
+      </div>
+
+      <!-- Event Body -->
+      <div class="event-body" id="ev-{{ ev.id }}" style="{{ '' if is_open else 'display:none' }}">
+
+        <!-- Members row -->
+        <div style="margin:16px 0 8px">
+          <div class="section-label">Members</div>
+          <div class="chips-row">
+            {% for mid in ev.members %}
+              {% set p = data.people | selectattr('id','equalto',mid) | first | default(none) %}
+              {% if p %}
+              <div class="chip">
+                <div class="av sm" style="background:{{ p.color }}">{{ p.initials }}</div>
+                {{ p.name }}
+              </div>
+              {% endif %}
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Activities header -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div class="section-label">Activities</div>
+          <button class="btn btn-ghost btn-sm" onclick="openSubModal('{{ ev.id }}')">+ Add Activity</button>
+        </div>
+
+        <!-- Sub-activities -->
+        {% if ev.subs %}
+        <div class="sub-list">
+          {% for sub in ev.subs %}
+          {% set is_sub_open = (open_sub == sub.id) %}
+          <div class="sub-item {{ 'open' if is_sub_open }}">
+
+            <div class="sub-header" onclick="toggleCard('sub-{{ sub.id }}')">
+              <div class="sub-icon">{{ sub.icon }}</div>
+              <div class="sub-name">{{ sub.name }}</div>
+              <div class="sub-ppl">{{ sub.included_ids|length }} people</div>
+              <div class="sub-total">${{ "%.2f"|format(sub.total) }}</div>
+              <div class="sub-arrow" id="arr-sub-{{ sub.id }}">▼</div>
+            </div>
+
+            <div class="sub-body" id="sub-{{ sub.id }}" style="{{ '' if is_sub_open else 'display:none' }}">
+
+              <!-- Participant exclude toggles -->
+              <div class="section-label" style="margin-bottom:8px">Participants — click to exclude</div>
+              <div class="chips-row" style="margin-bottom:16px">
+                {% for mid in ev.members %}
+                  {% set p = data.people | selectattr('id','equalto',mid) | first | default(none) %}
+                  {% if p %}
+                  {% set excluded = mid in sub.get('excludes', []) %}
+                  <form method="POST" action="{{ url_for('toggle_sub_exclude', eid=ev.id, sid=sub.id, pid=mid) }}" style="display:inline">
+                    <button type="submit" class="chip-btn {{ 'chip-excluded' if excluded else 'chip-included' }}">
+                      <div class="av sm" style="background:{{ p.color }}">{{ p.initials }}</div>
+                      {{ p.name }}{{ ' 🚫' if excluded else '' }}
+                    </button>
+                  </form>
+                  {% endif %}
+                {% endfor %}
+              </div>
+
+              <!-- Expenses -->
+              <div class="section-label" style="margin-bottom:8px">Expenses</div>
+              {% if sub.expenses %}
+                {% for exp in sub.expenses %}
+                <div class="exp-item">
+                  <div class="exp-info">
+                    <div class="exp-title">{{ exp.desc }}</div>
+                    <div class="exp-meta">
+                      Paid by:
+                      {% for payer in exp.payers %}
+                        {% set pp = data.people | selectattr('id','equalto',payer.personId) | first | default(none) %}
+                        {% if pp %}<strong style="color:var(--accent4)">{{ pp.name }} ${{ "%.2f"|format(payer.amount) }}</strong>{% if not loop.last %}, {% endif %}{% endif %}
+                      {% endfor %}
+                      · Split among {{ exp.included_ids|length }} → ${{ "%.2f"|format(exp.per_person) }}/person · {{ exp.date }}
+                    </div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <div class="exp-amount">${{ "%.2f"|format(exp.total) }}</div>
+                    <form method="POST" action="{{ url_for('remove_expense', eid=ev.id, sid=sub.id, idx=loop.index0) }}">
+                      <button type="submit" class="btn btn-danger" title="Remove">✕</button>
+                    </form>
+                  </div>
+                </div>
+                {% endfor %}
+              {% else %}
+                <div style="color:var(--muted);font-size:12px;padding:8px 0">No expenses yet</div>
+              {% endif %}
+
+              <!-- Add expense + remove sub buttons -->
+              <div class="btn-row" style="margin-top:12px">
+                <button class="btn btn-ghost btn-sm" onclick="openExpenseModal('{{ ev.id }}','{{ sub.id }}')">+ Add Expense</button>
+                <form method="POST" action="{{ url_for('remove_sub', eid=ev.id, sid=sub.id) }}" onsubmit="return confirm('Remove this activity?')" style="display:inline">
+                  <button type="submit" class="btn btn-danger btn-sm">✕ Remove Activity</button>
+                </form>
+              </div>
+
+            </div><!-- /sub-body -->
+          </div><!-- /sub-item -->
+          {% endfor %}
+        </div>
+        {% else %}
+          <div class="empty" style="padding:20px">No activities yet</div>
+        {% endif %}
+
+        <div class="divider"></div>
+        <form method="POST" action="{{ url_for('remove_event', eid=ev.id) }}" onsubmit="return confirm('Delete this event?')">
+          <button type="submit" class="btn btn-danger btn-sm">🗑 Delete Event</button>
+        </form>
+
+      </div><!-- /event-body -->
+    </div><!-- /event-card -->
+    {% endfor %}
+  {% else %}
+    <div class="empty"><div class="ei">📁</div>No events yet — create your first one</div>
+  {% endif %}
+  {% endif %}
+
+
+  <!-- ════════════════════════════════════════════ -->
+  <!-- SUMMARY PANEL                               -->
+  <!-- ════════════════════════════════════════════ -->
+  {% if active == 'summary' %}
+
+  <!-- Stats row -->
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="s-val" style="color:var(--accent3)">${{ "%.2f"|format(total_spent) }}</div>
+      <div class="s-lbl">Total Spent</div>
+    </div>
+    <div class="stat-card">
+      <div class="s-val" style="color:var(--accent)">{{ total_people }}</div>
+      <div class="s-lbl">People</div>
+    </div>
+    <div class="stat-card">
+      <div class="s-val" style="color:var(--accent4)">{{ total_events }}</div>
+      <div class="s-lbl">Events</div>
+    </div>
+  </div>
+
+  <!-- Event selector -->
+  <div class="card-title">Select Event</div>
+  <div class="chips-row" style="margin-bottom:28px">
+    {% for ev in data.events %}
+    <a href="{{ url_for('summary_page', eid=ev.id) }}"
+       class="btn {{ 'btn-primary' if eid == ev.id else 'btn-ghost' }}" style="gap:8px;text-decoration:none">
+      {{ ev.icon }} {{ ev.name }}
+      <span style="color:{{ 'rgba(255,255,255,.7)' if eid==ev.id else 'var(--accent3)' }}">${{ "%.2f"|format(ev.total) }}</span>
+    </a>
+    {% endfor %}
+  </div>
+
+  {% if sel_event %}
+
+  <!-- Balances -->
+  <div class="card">
+    <div class="card-title">{{ sel_event.icon }} {{ sel_event.name }} — Net Balances</div>
+    {% for b in bal_display %}
+    <div class="bal-row">
+      <div class="bal-av" style="background:{{ b.color }}">{{ b.initials }}</div>
+      <div class="bal-name">{{ b.name }}</div>
+      <span class="bal-tag tag-{{ b.status }}">{{ b.status }}</span>
+      <div class="bal-amt {{ 'bal-pos' if b.balance > 0.01 else ('bal-neg' if b.balance < -0.01 else 'bal-zero') }}">
+        {{ '+' if b.balance >= 0 else '' }}${{ "%.2f"|format(b.abs) }}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- Settlement plan -->
+  <div class="card">
+    <div class="card-title">💸 Settlement Plan</div>
+    {% if settlements %}
+      {% for s in settlements %}
+      <div class="settle-item">
+        <div class="bal-av sm" style="background:{{ s.from_color }}">{{ s.from_initials }}</div>
+        <div class="s-name">{{ s.from_name }}</div>
+        <div class="s-arr">→</div>
+        <div class="s-amt">${{ "%.2f"|format(s.amount) }}</div>
+        <div class="s-arr">→</div>
+        <div class="s-name" style="text-align:right">{{ s.to_name }}</div>
+        <div class="bal-av sm" style="background:{{ s.to_color }}">{{ s.to_initials }}</div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="settle-item" style="justify-content:center;color:var(--accent3)">✅ Everyone is settled up!</div>
+    {% endif %}
+  </div>
+
+  <!-- Activity breakdown -->
+  <div class="card">
+    <div class="card-title">📋 Activity Breakdown</div>
+    {% for sub in sel_event.subs %}
+    <div style="margin-bottom:20px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span>{{ sub.icon }}</span>
+        <span style="font-weight:600;font-size:14px">{{ sub.name }}</span>
+        <span style="margin-left:auto;font-family:'Syne',sans-serif;color:var(--accent4)">${{ "%.2f"|format(sub.total) }}</span>
+      </div>
+      {% for exp in sub.expenses %}
+      <div class="breakdown-exp">
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+          <strong>{{ exp.desc }}</strong>
+          <span style="color:var(--accent4);font-family:'Syne',sans-serif">${{ "%.2f"|format(exp.total) }}</span>
+        </div>
+        <div style="color:var(--muted)">
+          Paid by:
+          {% for payer in exp.payers %}
+            {% set pp = data.people | selectattr('id','equalto',payer.personId) | first | default(none) %}
+            {% if pp %}{{ pp.name }} ${{ "%.2f"|format(payer.amount) }}{% if not loop.last %}, {% endif %}{% endif %}
+          {% endfor %}
+        </div>
+        <div style="color:var(--muted)">Split among {{ exp.included_ids|length }} people → ${{ "%.2f"|format(exp.per_person) }}/person</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {% elif data.events %}
+    <div class="empty"><div class="ei">👆</div>Select an event above to see its settlement plan</div>
+  {% else %}
+    <div class="empty"><div class="ei">📁</div>No events yet — go to Events to create one</div>
+  {% endif %}
+
+  {% endif %}
+  <!-- /summary -->
+
+  </div><!-- /content -->
+</main>
+</div><!-- /layout -->
+
+
+<!-- ══ MODALS ════════════════════════════════════ -->
+
+<!-- Add Person -->
+<div class="modal-bg" id="modal-add-person">
+  <div class="modal">
+    <div class="modal-title">Add Person
+      <button class="modal-close" onclick="closeModal('modal-add-person')">×</button>
+    </div>
+    <form method="POST" action="{{ url_for('add_person') }}">
+      <div class="field">
+        <label>Full Name</label>
+        <input name="name" type="text" placeholder="e.g. Alice Johnson" autofocus required>
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary">Add Person</button>
+        <button type="button" class="btn btn-ghost" onclick="closeModal('modal-add-person')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Add Event -->
+<div class="modal-bg" id="modal-add-event">
+  <div class="modal">
+    <div class="modal-title">Create Event
+      <button class="modal-close" onclick="closeModal('modal-add-event')">×</button>
+    </div>
+    <form method="POST" action="{{ url_for('add_event') }}">
+      <div class="g2">
+        <div class="field">
+          <label>Event Title</label>
+          <input name="name" type="text" placeholder="e.g. Night Out…" required>
+        </div>
+        <div class="field">
+          <label>Icon</label>
+          <input name="icon" type="text" placeholder="🎉" maxlength="4" style="font-size:20px;width:70px">
+        </div>
+      </div>
+      <div class="field">
+        <label>Select Members</label>
+        <div class="search-wrap" style="margin-bottom:10px">
+          <span class="search-icon">🔍</span>
+          <input type="text" placeholder="Search…" oninput="filterModalPeople(this.value)">
+        </div>
+        <div id="modal-people-list" style="display:flex;flex-wrap:wrap;gap:7px;max-height:180px;overflow-y:auto">
+          {% for p in data.people %}
+          <label class="chip-label" data-name="{{ p.name|lower }}">
+            <input type="checkbox" name="members" value="{{ p.id }}" style="display:none" onchange="toggleChipLabel(this)">
+            <div class="chip toggle-chip" id="chip-{{ p.id }}">
+              <div class="av sm" style="background:{{ p.color }}">{{ p.initials }}</div>
+              {{ p.name }}
+            </div>
+          </label>
+          {% else %}
+          <div style="color:var(--muted);font-size:13px">No people yet — add people first</div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:16px">
+        <button type="submit" class="btn btn-primary">Create Event</button>
+        <button type="button" class="btn btn-ghost" onclick="closeModal('modal-add-event')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Add Sub-Activity -->
+<div class="modal-bg" id="modal-add-sub">
+  <div class="modal">
+    <div class="modal-title">Add Activity
+      <button class="modal-close" onclick="closeModal('modal-add-sub')">×</button>
+    </div>
+    <form method="POST" id="form-add-sub" action="">
+      <div class="g2">
+        <div class="field">
+          <label>Activity Name</label>
+          <input name="name" type="text" placeholder="e.g. Dinner, Bowling…" required>
+        </div>
+        <div class="field">
+          <label>Icon</label>
+          <input name="icon" type="text" placeholder="🍽️" maxlength="4" style="font-size:20px;width:70px">
+        </div>
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary">Add Activity</button>
+        <button type="button" class="btn btn-ghost" onclick="closeModal('modal-add-sub')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Add Expense -->
+<div class="modal-bg" id="modal-add-expense">
+  <div class="modal">
+    <div class="modal-title">Add Expense
+      <button class="modal-close" onclick="closeModal('modal-add-expense')">×</button>
+    </div>
+    <form method="POST" id="form-add-expense" action="">
+      <div class="field">
+        <label>Description</label>
+        <input name="desc" type="text" placeholder="e.g. Dinner for 8, Taxi…" required>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Participants to exclude -->
+      <div class="field">
+        <label>Participants — click to exclude</label>
+        <div id="exp-participant-list" style="display:flex;flex-wrap:wrap;gap:7px;margin-top:4px"></div>
+        <input type="hidden" id="exp-excludes-input" name="_placeholder">
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Payers -->
+      <div class="field">
+        <label>Who Paid?</label>
+        <div id="exp-payer-rows" style="margin-bottom:10px"></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="exp-payer-select" style="flex:1">
+            <option value="">— add a payer —</option>
+          </select>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="addPayerRow()">+ Add</button>
+        </div>
+        <div id="exp-payer-total" style="font-size:12px;color:var(--muted);text-align:right;margin-top:6px"></div>
+      </div>
+
+      <!-- Hidden payer fields rendered by JS -->
+      <div id="exp-hidden-fields"></div>
+
+      <div class="divider"></div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary">Record Expense</button>
+        <button type="button" class="btn btn-ghost" onclick="closeModal('modal-add-expense')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+
+<!-- ══ JS ════════════════════════════════════════ -->
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+
+<!-- Auto-open flash modal -->
+<script>
+  {% if get_flashed_messages() %}
+    setTimeout(() => {
+      document.querySelectorAll('.flash').forEach(el => {
+        setTimeout(() => el.style.opacity = '0', 2500);
+        setTimeout(() => el.remove(), 3000);
+      });
+    }, 100);
+  {% endif %}
+</script>
+
+</body>
+</html>
